@@ -49,19 +49,46 @@ export ANTHROPIC_API_KEY=your-api-key
 
 # Analyze a repository
 npm run analyze -- /path/to/your/repo -o architecture.json
+
+# Or use Vertex AI authentication
+export GOOGLE_CLOUD_PROJECT=your-project-id
+npm run analyze -- /path/to/your/repo --vertex -o architecture.json
 ```
 
 ### CLI Options
 
 ```
 Usage:
-  npm run analyze -- <repository-path> [options]
+  npm run analyze -- <repository-path> [options]    Analyze a codebase
+  npm run analyze -- --input <json-file> [options]  Visualize existing JSON
 
 Options:
   --output, -o <path>   Output file path (default: stdout)
+  --input, -i <file>    Load architecture JSON and start 3D visualization
   --type, -t <type>     Analysis type: full, services, dependencies, classes
-  --depth, -d <number>  Maximum depth for analysis (default: 3)
+  --depth, -d <number>  Maximum depth for directory traversal (default: 3)
+  --port, -p <number>   Port for visualization server (default: 3000)
+  --vertex              Use Google Cloud Vertex AI authentication
+  --project <id>        GCP project ID (for Vertex AI)
+  --region <region>     GCP region (for Vertex AI, default: us-east5)
 ```
+
+### Visualizing Architecture
+
+After generating an architecture JSON file, you can visualize it in 3D:
+
+```bash
+# Analyze and save to file
+npm run analyze -- ./my-project -o architecture.json
+
+# Visualize the architecture file
+npm run analyze -- --input architecture.json
+
+# Specify a custom port
+npm run analyze -- -i architecture.json --port 8080
+```
+
+This will start the Vite development server and open the 3D visualization with your architecture loaded.
 
 ## Architecture Schema
 

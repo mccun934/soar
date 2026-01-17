@@ -29,3 +29,10 @@ npm-debug.log*
 
 # Testing
 coverage/
+
+# Generated architecture file
+public/architecture.json
+
+# Test repos
+.test-repos/
+.test-repos-cli/

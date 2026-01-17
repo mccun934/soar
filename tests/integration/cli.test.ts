@@ -8,7 +8,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execSync, spawn } from 'child_process'
-import { existsSync, mkdirSync, rmSync, readFileSync } from 'fs'
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
 // Test configuration
@@ -44,6 +44,26 @@ function runCLI(args: string[], env?: Record<string, string>): { stdout: string;
       stdout: error.stdout || '',
       stderr: error.stderr || error.message,
       exitCode: error.status || 1,
+    }
+  }
+}
+
+// Run the CLI with a shorter timeout (for commands that start servers and hang)
+function runCLIWithTimeout(args: string[], timeoutMs: number): { stdout: string; stderr: string; exitCode: number } {
+  try {
+    const result = execSync(`npx tsx src/cli/analyze.ts ${args.join(' ')}`, {
+      timeout: timeoutMs,
+      encoding: 'utf-8',
+      env: process.env,
+      cwd: process.cwd(),
+    })
+    return { stdout: result, stderr: '', exitCode: 0 }
+  } catch (error: any) {
+    // Timeout is expected for server commands - capture output
+    return {
+      stdout: error.stdout || '',
+      stderr: error.stderr || '',
+      exitCode: error.killed ? 0 : (error.status || 1),
     }
   }
 }
@@ -216,6 +236,120 @@ describe('CLI Integration Tests', () => {
       const result = runCLI(['/non/existent/path'])
       // Should still run but with empty/minimal results
       expect(result.stdout).toContain('Analyzing repository')
+    })
+  })
+
+  describe('CLI --input Mode', () => {
+    const testFilesDir = join(TEST_REPOS_DIR, 'input-test-files')
+
+    beforeAll(() => {
+      if (!existsSync(testFilesDir)) {
+        mkdirSync(testFilesDir, { recursive: true })
+      }
+    })
+
+    it('should show --input option in help', () => {
+      const result = runCLI(['--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('--input')
+      expect(result.stdout).toContain('-i')
+      expect(result.stdout).toContain('Load architecture')
+    })
+
+    it('should error when input file does not exist', () => {
+      const result = runCLI(['--input', '/non/existent/file.json'])
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('File not found')
+    })
+
+    it('should error on invalid JSON file', () => {
+      const invalidJsonPath = join(testFilesDir, 'invalid.json')
+      writeFileSync(invalidJsonPath, '{ invalid json content')
+
+      const result = runCLI(['--input', invalidJsonPath])
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Invalid JSON')
+    })
+
+    it('should error on JSON missing architecture field', () => {
+      const noArchPath = join(testFilesDir, 'no-architecture.json')
+      writeFileSync(noArchPath, JSON.stringify({ name: 'test' }))
+
+      const result = runCLI(['--input', noArchPath])
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('missing')
+      expect(result.stderr).toContain('architecture')
+    })
+
+    it('should error on architecture missing nodes array', () => {
+      const noNodesPath = join(testFilesDir, 'no-nodes.json')
+      writeFileSync(noNodesPath, JSON.stringify({
+        architecture: {
+          name: 'Test',
+          connections: []
+        }
+      }))
+
+      const result = runCLI(['--input', noNodesPath])
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('nodes')
+    })
+
+    it('should error on architecture missing connections array', () => {
+      const noConnectionsPath = join(testFilesDir, 'no-connections.json')
+      writeFileSync(noConnectionsPath, JSON.stringify({
+        architecture: {
+          name: 'Test',
+          nodes: []
+        }
+      }))
+
+      const result = runCLI(['--input', noConnectionsPath])
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('connections')
+    })
+
+    it('should successfully validate and load a valid architecture file', () => {
+      const validPath = join(testFilesDir, 'valid-architecture.json')
+      const validArchitecture = {
+        architecture: {
+          name: 'Test Architecture',
+          version: '1.0.0',
+          description: 'A test architecture',
+          nodes: [
+            { id: 'node-1', name: 'Service A', type: 'service' },
+            { id: 'node-2', name: 'Database', type: 'database' }
+          ],
+          connections: [
+            { id: 'conn-1', sourceId: 'node-1', targetId: 'node-2', type: 'database' }
+          ]
+        },
+        summary: 'Test architecture summary',
+        insights: ['Insight 1'],
+        warnings: []
+      }
+      writeFileSync(validPath, JSON.stringify(validArchitecture, null, 2))
+
+      // Run with a short timeout since the vite server will hang
+      // We just want to verify it validates and starts (output shows success)
+      const result = runCLIWithTimeout(['--input', validPath], 3000)
+
+      // Should show validation success messages
+      expect(result.stdout).toContain('Loaded architecture from')
+      expect(result.stdout).toContain('Test Architecture')
+      expect(result.stdout).toContain('Nodes: 2')
+      expect(result.stdout).toContain('Connections: 1')
+      expect(result.stdout).toContain('Written to')
+      expect(result.stdout).toContain('Starting visualization server')
+    })
+
+    it('should support --port flag with --input', () => {
+      const validPath = join(testFilesDir, 'valid-architecture.json')
+      // Reuse the valid file from previous test
+
+      const result = runCLIWithTimeout(['--input', validPath, '--port', '8888'], 3000)
+
+      expect(result.stdout).toContain('localhost:8888')
     })
   })
 })
