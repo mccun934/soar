@@ -6,7 +6,7 @@ import type {
   AnalysisRequest,
   AnalysisResult,
   NodeType,
-} from '@/types/architecture'
+} from '../types/architecture'
 
 /**
  * SOAR Architecture Analyzer
