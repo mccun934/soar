@@ -175,19 +175,139 @@ export class ArchitectureAnalyzer {
    * Gather information about the codebase
    */
   private async gatherCodebaseInfo(request: AnalysisRequest): Promise<CodebaseInfo> {
-    // In a real implementation, this would:
-    // 1. Walk the directory tree
-    // 2. Read package.json, go.mod, requirements.txt, etc.
-    // 3. Parse imports and exports
-    // 4. Identify entry points
-    // 5. Find configuration files
+    const { readdirSync, statSync, readFileSync, existsSync } = await import('fs')
+    const { join, relative, extname } = await import('path')
+
+    const files: CodebaseInfo['files'] = []
+    const packageManifests: CodebaseInfo['packageManifests'] = []
+    const configFiles: CodebaseInfo['configFiles'] = []
+    const entryPoints: string[] = []
+
+    // File patterns for package manifests
+    const manifestPatterns = [
+      'package.json', 'go.mod', 'go.sum', 'Cargo.toml',
+      'requirements.txt', 'pyproject.toml', 'setup.py',
+      'pom.xml', 'build.gradle', 'build.gradle.kts',
+      'Gemfile', 'composer.json', 'mix.exs'
+    ]
+
+    // File patterns for config files
+    const configPatterns = [
+      'docker-compose.yml', 'docker-compose.yaml', 'Dockerfile',
+      'kubernetes.yml', 'kubernetes.yaml', 'k8s.yml', 'k8s.yaml',
+      '.env.example', 'config.yml', 'config.yaml', 'config.json',
+      'tsconfig.json', 'vite.config.ts', 'webpack.config.js',
+      'nginx.conf', 'Makefile', 'CMakeLists.txt'
+    ]
+
+    // Entry point patterns
+    const entryPointPatterns = [
+      'main.go', 'main.py', 'main.ts', 'main.js', 'index.ts', 'index.js',
+      'app.py', 'app.ts', 'app.js', 'server.ts', 'server.js',
+      'Main.java', 'Application.java', 'main.rs', 'lib.rs'
+    ]
+
+    // Extension to type mapping
+    const extToType: Record<string, string> = {
+      '.ts': 'typescript', '.tsx': 'typescript',
+      '.js': 'javascript', '.jsx': 'javascript',
+      '.py': 'python',
+      '.go': 'go',
+      '.java': 'java',
+      '.rs': 'rust',
+      '.rb': 'ruby',
+      '.cs': 'csharp',
+      '.cpp': 'cpp', '.c': 'c', '.h': 'c',
+      '.scala': 'scala',
+      '.kt': 'kotlin',
+      '.swift': 'swift',
+      '.proto': 'protobuf',
+      '.yaml': 'yaml', '.yml': 'yaml',
+      '.json': 'json',
+      '.md': 'markdown',
+      '.sql': 'sql',
+    }
+
+    // Directories to skip
+    const skipDirs = new Set([
+      'node_modules', 'vendor', '.git', 'dist', 'build', 'target',
+      '__pycache__', '.venv', 'venv', '.idea', '.vscode', 'coverage',
+      '.next', '.nuxt', 'out', 'bin', 'obj', '.gradle'
+    ])
+
+    const maxFiles = 500 // Limit files to avoid token overflow
+    const maxFileSize = 50000 // 50KB max per file
+    let fileCount = 0
+
+    const walk = (dir: string, depth: number = 0) => {
+      if (depth > (request.maxDepth || 5) || fileCount >= maxFiles) return
+
+      try {
+        const entries = readdirSync(dir)
+        for (const entry of entries) {
+          if (fileCount >= maxFiles) break
+          if (entry.startsWith('.') && entry !== '.env.example') continue
+          if (skipDirs.has(entry)) continue
+
+          const fullPath = join(dir, entry)
+          const relativePath = relative(request.repositoryPath, fullPath)
+
+          try {
+            const stat = statSync(fullPath)
+
+            if (stat.isDirectory()) {
+              walk(fullPath, depth + 1)
+            } else if (stat.isFile()) {
+              const ext = extname(entry).toLowerCase()
+              const fileType = extToType[ext] || 'other'
+              const fileName = entry.toLowerCase()
+
+              // Track file in structure
+              if (extToType[ext]) {
+                files.push({ path: relativePath, type: fileType })
+                fileCount++
+              }
+
+              // Check for package manifests
+              if (manifestPatterns.includes(entry)) {
+                try {
+                  const content = readFileSync(fullPath, 'utf-8')
+                  if (content.length <= maxFileSize) {
+                    packageManifests.push({ path: relativePath, content })
+                  }
+                } catch {}
+              }
+
+              // Check for config files
+              if (configPatterns.some(p => fileName.includes(p.toLowerCase()) || entry === p)) {
+                try {
+                  const content = readFileSync(fullPath, 'utf-8')
+                  if (content.length <= maxFileSize) {
+                    configFiles.push({ path: relativePath, content })
+                  }
+                } catch {}
+              }
+
+              // Check for entry points
+              if (entryPointPatterns.includes(entry)) {
+                entryPoints.push(relativePath)
+              }
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    if (existsSync(request.repositoryPath)) {
+      walk(request.repositoryPath)
+    }
 
     return {
       repositoryPath: request.repositoryPath,
-      files: [],
-      packageManifests: [],
-      entryPoints: [],
-      configFiles: [],
+      files,
+      packageManifests,
+      entryPoints,
+      configFiles,
     }
   }
 
