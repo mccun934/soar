@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { AnthropicVertex } from '@anthropic-ai/vertex-sdk'
 import type {
   Architecture,
   ArchitectureNode,
@@ -10,7 +11,24 @@ import type {
 /**
  * SOAR Architecture Analyzer
  * Uses Anthropic's Claude to introspect codebases and generate architecture models
+ * Supports both direct Anthropic API and Google Cloud Vertex AI authentication
  */
+
+// Authentication configuration
+export type AuthProvider = 'anthropic' | 'vertex'
+
+export interface AnthropicAuthConfig {
+  provider: 'anthropic'
+  apiKey?: string  // Falls back to ANTHROPIC_API_KEY env var
+}
+
+export interface VertexAuthConfig {
+  provider: 'vertex'
+  projectId?: string   // Falls back to GOOGLE_CLOUD_PROJECT env var
+  region?: string      // Falls back to GOOGLE_CLOUD_REGION env var, defaults to 'us-east5'
+}
+
+export type AuthConfig = AnthropicAuthConfig | VertexAuthConfig
 
 const ANALYSIS_SYSTEM_PROMPT = `You are an expert software architect analyzing codebases to understand their structure and generate architecture models.
 
@@ -62,13 +80,53 @@ For connections, use these types:
 
 Be thorough but concise. Focus on the most important architectural components.`
 
-export class ArchitectureAnalyzer {
-  private client: Anthropic
+// Model names differ between Anthropic API and Vertex AI
+const MODELS = {
+  anthropic: 'claude-sonnet-4-20250514',
+  vertex: 'claude-sonnet-4@20250514',
+}
 
-  constructor(apiKey?: string) {
-    this.client = new Anthropic({
-      apiKey: apiKey || process.env.ANTHROPIC_API_KEY,
-    })
+export class ArchitectureAnalyzer {
+  private client: Anthropic | AnthropicVertex
+  private provider: AuthProvider
+  private model: string
+
+  constructor(config?: AuthConfig) {
+    // Default to Anthropic if no config provided
+    if (!config) {
+      config = { provider: 'anthropic' }
+    }
+
+    this.provider = config.provider
+
+    if (config.provider === 'vertex') {
+      const projectId = config.projectId || process.env.GOOGLE_CLOUD_PROJECT
+      const region = config.region || process.env.GOOGLE_CLOUD_REGION || 'us-east5'
+
+      if (!projectId) {
+        throw new Error(
+          'Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT env var or pass projectId in config.'
+        )
+      }
+
+      this.client = new AnthropicVertex({
+        projectId,
+        region,
+      })
+      this.model = MODELS.vertex
+    } else {
+      this.client = new Anthropic({
+        apiKey: config.apiKey || process.env.ANTHROPIC_API_KEY,
+      })
+      this.model = MODELS.anthropic
+    }
+  }
+
+  /**
+   * Get the current authentication provider
+   */
+  getProvider(): AuthProvider {
+    return this.provider
   }
 
   /**
@@ -85,8 +143,8 @@ export class ArchitectureAnalyzer {
     const codebaseInfo = await this.gatherCodebaseInfo(request)
     const analysisPrompt = this.buildAnalysisPrompt(codebaseInfo)
 
-    const response = await this.client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    const response = await (this.client.messages.create as Anthropic['messages']['create'])({
+      model: this.model,
       max_tokens: 8192,
       system: ANALYSIS_SYSTEM_PROMPT,
       messages: [
@@ -98,7 +156,7 @@ export class ArchitectureAnalyzer {
     })
 
     // Extract the text content
-    const textContent = response.content.find((c) => c.type === 'text')
+    const textContent = response.content.find((c: { type: string }) => c.type === 'text')
     if (!textContent || textContent.type !== 'text') {
       throw new Error('No text response from Claude')
     }
@@ -244,9 +302,9 @@ interface CodebaseInfo {
  */
 export async function analyzeRepository(
   repositoryPath: string,
-  options?: Partial<AnalysisRequest>
+  options?: Partial<AnalysisRequest> & { auth?: AuthConfig }
 ): Promise<AnalysisResult> {
-  const analyzer = new ArchitectureAnalyzer()
+  const analyzer = new ArchitectureAnalyzer(options?.auth)
   return analyzer.analyze({
     repositoryPath,
     analysisType: 'full',
