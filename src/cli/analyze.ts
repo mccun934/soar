@@ -6,10 +6,12 @@
  * Usage:
  *   npm run analyze -- <repository-path> [options]
  *   npm run analyze -- --input <json-file>
+ *   npm run analyze -- --validate <json-file>
  *
  * Options:
  *   --output, -o    Output file path (default: stdout)
  *   --input, -i     Load architecture from JSON file and start visualization
+ *   --validate, -v  Validate an architecture JSON file (no visualization)
  *   --type, -t      Analysis type: full, services, dependencies, classes (default: full)
  *   --depth, -d     Maximum depth for analysis (default: 3)
  *   --vertex        Use Google Cloud Vertex AI instead of Anthropic API
@@ -23,7 +25,13 @@ import { resolve, join } from 'path'
 import { spawn } from 'child_process'
 import { ArchitectureAnalyzer } from '../lib/analyzer'
 import type { AuthConfig } from '../lib/analyzer'
-import type { AnalysisRequest, AnalysisResult } from '../types/architecture'
+import type { AnalysisRequest } from '../types/architecture'
+import {
+  validateArchitecture,
+  formatValidationErrors,
+  type AnalysisResult,
+  type ValidationResult,
+} from '../lib/schema'
 
 async function startVisualizationServer(port: number): Promise<void> {
   console.log(`\n🚀 Starting visualization server on http://localhost:${port}`)
@@ -59,38 +67,21 @@ async function startVisualizationServer(port: number): Promise<void> {
   })
 }
 
-function loadAndValidateArchitecture(inputPath: string): AnalysisResult {
+interface LoadResult {
+  result?: AnalysisResult
+  validation: ValidationResult
+}
+
+function loadAndValidateArchitecture(inputPath: string, verbose = true): LoadResult {
   if (!existsSync(inputPath)) {
     console.error(`Error: File not found: ${inputPath}`)
     process.exit(1)
   }
 
+  let data: unknown
   try {
     const content = readFileSync(inputPath, 'utf-8')
-    const data = JSON.parse(content)
-
-    // Validate the structure
-    if (!data.architecture) {
-      console.error('Error: Invalid architecture file - missing "architecture" field')
-      process.exit(1)
-    }
-
-    if (!data.architecture.nodes || !Array.isArray(data.architecture.nodes)) {
-      console.error('Error: Invalid architecture file - missing or invalid "nodes" array')
-      process.exit(1)
-    }
-
-    if (!data.architecture.connections || !Array.isArray(data.architecture.connections)) {
-      console.error('Error: Invalid architecture file - missing or invalid "connections" array')
-      process.exit(1)
-    }
-
-    console.log(`✅ Loaded architecture from: ${inputPath}`)
-    console.log(`   Name: ${data.architecture.name || 'Unnamed'}`)
-    console.log(`   Nodes: ${data.architecture.nodes.length}`)
-    console.log(`   Connections: ${data.architecture.connections.length}`)
-
-    return data as AnalysisResult
+    data = JSON.parse(content)
   } catch (error) {
     if (error instanceof SyntaxError) {
       console.error(`Error: Invalid JSON in file: ${inputPath}`)
@@ -99,6 +90,77 @@ function loadAndValidateArchitecture(inputPath: string): AnalysisResult {
     }
     process.exit(1)
   }
+
+  // Validate using Zod schema
+  const validation = validateArchitecture(data)
+
+  if (!validation.success) {
+    if (verbose) {
+      console.error(`\n❌ Validation failed for: ${inputPath}\n`)
+      console.error(formatValidationErrors(validation.errors!))
+    }
+    return { validation }
+  }
+
+  if (verbose) {
+    console.log(`✅ Loaded architecture from: ${inputPath}`)
+    console.log(`   Name: ${validation.data!.architecture.name}`)
+    console.log(`   Nodes: ${validation.data!.architecture.nodes.length}`)
+    console.log(`   Connections: ${validation.data!.architecture.connections.length}`)
+  }
+
+  return { result: validation.data, validation }
+}
+
+/**
+ * Validate a file and print detailed results
+ */
+function validateFile(inputPath: string): void {
+  console.log(`\n🔍 Validating: ${inputPath}\n`)
+
+  const { result, validation } = loadAndValidateArchitecture(inputPath, false)
+
+  if (!validation.success) {
+    console.error('❌ Validation FAILED\n')
+    console.error(formatValidationErrors(validation.errors!))
+    console.error(`\nTotal errors: ${validation.errors!.length}`)
+    process.exit(1)
+  }
+
+  const arch = result!.architecture
+  console.log('✅ Validation PASSED\n')
+  console.log('Architecture Summary:')
+  console.log(`  Name:        ${arch.name}`)
+  console.log(`  Version:     ${arch.version}`)
+  if (arch.description) {
+    console.log(`  Description: ${arch.description}`)
+  }
+  console.log(`  Nodes:       ${arch.nodes.length}`)
+  console.log(`  Connections: ${arch.connections.length}`)
+
+  // Show node type breakdown
+  const nodeTypes = new Map<string, number>()
+  for (const node of arch.nodes) {
+    nodeTypes.set(node.type, (nodeTypes.get(node.type) || 0) + 1)
+  }
+  console.log('\nNode Types:')
+  for (const [type, count] of nodeTypes) {
+    console.log(`  ${type}: ${count}`)
+  }
+
+  // Show connection type breakdown
+  const connTypes = new Map<string, number>()
+  for (const conn of arch.connections) {
+    connTypes.set(conn.type, (connTypes.get(conn.type) || 0) + 1)
+  }
+  if (connTypes.size > 0) {
+    console.log('\nConnection Types:')
+    for (const [type, count] of connTypes) {
+      console.log(`  ${type}: ${count}`)
+    }
+  }
+
+  console.log('')
 }
 
 function writeArchitectureForVisualization(result: AnalysisResult): void {
@@ -120,10 +182,12 @@ SOAR - Software Architecture Analyzer & Visualizer
 Usage:
   npm run analyze -- <repository-path> [options]    Analyze a codebase
   npm run analyze -- --input <json-file> [options]  Visualize existing JSON
+  npm run analyze -- --validate <json-file>         Validate a JSON file
 
 Options:
   --output, -o <path>   Output file path (default: stdout)
   --input, -i <file>    Load architecture JSON and start 3D visualization
+  --validate <file>     Validate an architecture JSON file against schema
   --type, -t <type>     Analysis type: full, services, dependencies, classes
   --depth, -d <number>  Maximum depth for directory traversal (default: 3)
   --port, -p <number>   Port for visualization server (default: 3000)
@@ -147,8 +211,8 @@ Examples:
   npm run analyze -- ./my-project
   npm run analyze -- ./my-project -o architecture.json
 
-  # Analyze and immediately visualize
-  npm run analyze -- ./my-project -o arch.json && npm run analyze -- -i arch.json
+  # Validate an architecture file
+  npm run analyze -- --validate architecture.json
 
   # Visualize an existing architecture file
   npm run analyze -- --input architecture.json
@@ -162,6 +226,7 @@ Examples:
 
   // Parse arguments
   let inputPath: string | undefined
+  let validatePath: string | undefined
   let outputPath: string | undefined
   let analysisType: AnalysisRequest['analysisType'] = 'full'
   let maxDepth = 3
@@ -177,6 +242,9 @@ Examples:
 
     if (arg === '--input' || arg === '-i') {
       inputPath = resolve(nextArg)
+      i++
+    } else if (arg === '--validate') {
+      validatePath = resolve(nextArg)
       i++
     } else if (arg === '--output' || arg === '-o') {
       outputPath = nextArg
@@ -203,18 +271,27 @@ Examples:
     }
   }
 
-  // Mode 1: Visualize existing architecture file
+  // Mode 1: Validate only (no visualization)
+  if (validatePath) {
+    validateFile(validatePath)
+    return
+  }
+
+  // Mode 2: Visualize existing architecture file
   if (inputPath) {
     console.log('\n📊 SOAR - Architecture Visualization Mode\n')
 
-    const result = loadAndValidateArchitecture(inputPath)
-    writeArchitectureForVisualization(result)
+    const { result, validation } = loadAndValidateArchitecture(inputPath)
+    if (!validation.success) {
+      process.exit(1)
+    }
+    writeArchitectureForVisualization(result!)
 
     await startVisualizationServer(port)
     return
   }
 
-  // Mode 2: Analyze repository
+  // Mode 3: Analyze repository
   if (!repositoryPath) {
     console.error('Error: Please provide a repository path or use --input to load a JSON file')
     console.error('Run with --help for usage information')

@@ -277,7 +277,7 @@ describe('CLI Integration Tests', () => {
 
       const result = runCLI(['--input', noArchPath])
       expect(result.exitCode).toBe(1)
-      expect(result.stderr).toContain('missing')
+      // Zod validation error includes the field path
       expect(result.stderr).toContain('architecture')
     })
 
@@ -330,9 +330,10 @@ describe('CLI Integration Tests', () => {
       }
       writeFileSync(validPath, JSON.stringify(validArchitecture, null, 2))
 
-      // Run with a short timeout since the vite server will hang
+      // Run with a timeout since the vite server will hang
       // We just want to verify it validates and starts (output shows success)
-      const result = runCLIWithTimeout(['--input', validPath], 3000)
+      // Need 5+ seconds for vite to initialize and output messages
+      const result = runCLIWithTimeout(['--input', validPath], 6000)
 
       // Should show validation success messages
       expect(result.stdout).toContain('Loaded architecture from')
@@ -347,9 +348,225 @@ describe('CLI Integration Tests', () => {
       const validPath = join(testFilesDir, 'valid-architecture.json')
       // Reuse the valid file from previous test
 
-      const result = runCLIWithTimeout(['--input', validPath, '--port', '8888'], 3000)
+      const result = runCLIWithTimeout(['--input', validPath, '--port', '8888'], 6000)
 
       expect(result.stdout).toContain('localhost:8888')
+    })
+  })
+
+  describe('CLI --validate Mode (Phase 2)', () => {
+    const testFilesDir = join(TEST_REPOS_DIR, 'validate-test-files')
+
+    beforeAll(() => {
+      if (!existsSync(testFilesDir)) {
+        mkdirSync(testFilesDir, { recursive: true })
+      }
+    })
+
+    it('should show --validate option in help', () => {
+      const result = runCLI(['--help'])
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('--validate')
+      expect(result.stdout).toContain('Validate')
+    })
+
+    it('should validate a valid architecture file and exit successfully', () => {
+      const validPath = join(testFilesDir, 'valid.json')
+      const validArchitecture = {
+        architecture: {
+          name: 'Valid App',
+          version: '1.0.0',
+          description: 'A valid architecture',
+          nodes: [
+            { id: 'svc-1', name: 'API Service', type: 'service' },
+            { id: 'db-1', name: 'PostgreSQL', type: 'database' },
+            { id: 'cache-1', name: 'Redis Cache', type: 'cache' },
+          ],
+          connections: [
+            { id: 'c1', sourceId: 'svc-1', targetId: 'db-1', type: 'database' },
+            { id: 'c2', sourceId: 'svc-1', targetId: 'cache-1', type: 'http' },
+          ],
+        },
+        summary: 'A microservice with database and cache',
+        insights: ['Uses PostgreSQL for persistence', 'Redis for caching'],
+        warnings: [],
+      }
+      writeFileSync(validPath, JSON.stringify(validArchitecture, null, 2))
+
+      const result = runCLI(['--validate', validPath])
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Validation PASSED')
+      expect(result.stdout).toContain('Valid App')
+      expect(result.stdout).toContain('Nodes:       3')
+      expect(result.stdout).toContain('Connections: 2')
+      expect(result.stdout).toContain('service: 1')
+      expect(result.stdout).toContain('database: 1')
+      expect(result.stdout).toContain('cache: 1')
+    })
+
+    it('should fail validation for missing required fields', () => {
+      const invalidPath = join(testFilesDir, 'missing-fields.json')
+      writeFileSync(invalidPath, JSON.stringify({
+        architecture: {
+          name: 'Test',
+          version: '1.0.0',
+          nodes: [
+            { id: 'n1', type: 'service' }, // missing name
+          ],
+          connections: [],
+        },
+        summary: 'Test',
+        insights: [],
+        warnings: [],
+      }))
+
+      const result = runCLI(['--validate', invalidPath])
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Validation FAILED')
+      expect(result.stderr).toContain('name')
+    })
+
+    it('should fail validation for invalid node type', () => {
+      const invalidPath = join(testFilesDir, 'invalid-node-type.json')
+      writeFileSync(invalidPath, JSON.stringify({
+        architecture: {
+          name: 'Test',
+          version: '1.0.0',
+          nodes: [
+            { id: 'n1', name: 'Bad Node', type: 'invalid-type' },
+          ],
+          connections: [],
+        },
+        summary: 'Test',
+        insights: [],
+        warnings: [],
+      }))
+
+      const result = runCLI(['--validate', invalidPath])
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Validation FAILED')
+    })
+
+    it('should fail validation for invalid connection type', () => {
+      const invalidPath = join(testFilesDir, 'invalid-conn-type.json')
+      writeFileSync(invalidPath, JSON.stringify({
+        architecture: {
+          name: 'Test',
+          version: '1.0.0',
+          nodes: [
+            { id: 'n1', name: 'Node 1', type: 'service' },
+            { id: 'n2', name: 'Node 2', type: 'service' },
+          ],
+          connections: [
+            { id: 'c1', sourceId: 'n1', targetId: 'n2', type: 'invalid-connection' },
+          ],
+        },
+        summary: 'Test',
+        insights: [],
+        warnings: [],
+      }))
+
+      const result = runCLI(['--validate', invalidPath])
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Validation FAILED')
+    })
+
+    it('should fail validation for empty nodes array', () => {
+      const invalidPath = join(testFilesDir, 'empty-nodes.json')
+      writeFileSync(invalidPath, JSON.stringify({
+        architecture: {
+          name: 'Test',
+          version: '1.0.0',
+          nodes: [],
+          connections: [],
+        },
+        summary: 'Test',
+        insights: [],
+        warnings: [],
+      }))
+
+      const result = runCLI(['--validate', invalidPath])
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Validation FAILED')
+      expect(result.stderr).toContain('at least one node')
+    })
+
+    it('should fail validation for empty architecture name', () => {
+      const invalidPath = join(testFilesDir, 'empty-name.json')
+      writeFileSync(invalidPath, JSON.stringify({
+        architecture: {
+          name: '',
+          version: '1.0.0',
+          nodes: [{ id: 'n1', name: 'Node', type: 'service' }],
+          connections: [],
+        },
+        summary: 'Test',
+        insights: [],
+        warnings: [],
+      }))
+
+      const result = runCLI(['--validate', invalidPath])
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Validation FAILED')
+    })
+
+    it('should show node type breakdown in validation output', () => {
+      const validPath = join(testFilesDir, 'multi-types.json')
+      writeFileSync(validPath, JSON.stringify({
+        architecture: {
+          name: 'Multi-type App',
+          version: '1.0.0',
+          nodes: [
+            { id: 'n1', name: 'API', type: 'gateway' },
+            { id: 'n2', name: 'Service 1', type: 'service' },
+            { id: 'n3', name: 'Service 2', type: 'service' },
+            { id: 'n4', name: 'DB', type: 'database' },
+            { id: 'n5', name: 'Queue', type: 'queue' },
+          ],
+          connections: [
+            { id: 'c1', sourceId: 'n1', targetId: 'n2', type: 'http' },
+            { id: 'c2', sourceId: 'n2', targetId: 'n4', type: 'database' },
+            { id: 'c3', sourceId: 'n2', targetId: 'n5', type: 'queue' },
+          ],
+        },
+        summary: 'Test',
+        insights: [],
+        warnings: [],
+      }))
+
+      const result = runCLI(['--validate', validPath])
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Node Types:')
+      expect(result.stdout).toContain('gateway: 1')
+      expect(result.stdout).toContain('service: 2')
+      expect(result.stdout).toContain('database: 1')
+      expect(result.stdout).toContain('queue: 1')
+      expect(result.stdout).toContain('Connection Types:')
+      expect(result.stdout).toContain('http: 1')
+    })
+
+    it('should error when validate file does not exist', () => {
+      const result = runCLI(['--validate', '/nonexistent/file.json'])
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('File not found')
+    })
+
+    it('should error when validate file has invalid JSON', () => {
+      const invalidPath = join(testFilesDir, 'bad-json.json')
+      writeFileSync(invalidPath, '{ invalid json }')
+
+      const result = runCLI(['--validate', invalidPath])
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Invalid JSON')
     })
   })
 })
