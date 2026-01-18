@@ -49,18 +49,94 @@ export ANTHROPIC_API_KEY=your-api-key
 
 # Analyze a repository
 npm run analyze -- /path/to/your/repo -o architecture.json
+
+# Or use Vertex AI authentication
+export GOOGLE_CLOUD_PROJECT=your-project-id
+npm run analyze -- /path/to/your/repo --vertex -o architecture.json
 ```
 
 ### CLI Options
 
 ```
 Usage:
-  npm run analyze -- <repository-path> [options]
+  npm run analyze -- <repository-path> [options]    Analyze a codebase
+  npm run analyze -- --input <json-file> [options]  Visualize existing JSON
+  npm run analyze -- --validate <json-file>         Validate a JSON file
 
 Options:
   --output, -o <path>   Output file path (default: stdout)
+  --input, -i <file>    Load architecture JSON and start 3D visualization
+  --validate <file>     Validate an architecture JSON file against schema
   --type, -t <type>     Analysis type: full, services, dependencies, classes
-  --depth, -d <number>  Maximum depth for analysis (default: 3)
+  --depth, -d <number>  Maximum depth for directory traversal (default: 3)
+  --port, -p <number>   Port for visualization server (default: 3000)
+  --vertex              Use Google Cloud Vertex AI authentication
+  --project <id>        GCP project ID (for Vertex AI)
+  --region <region>     GCP region (for Vertex AI, default: us-east5)
+```
+
+### Visualizing Architecture
+
+After generating an architecture JSON file, you can visualize it in 3D:
+
+```bash
+# Analyze and save to file
+npm run analyze -- ./my-project -o architecture.json
+
+# Visualize the architecture file
+npm run analyze -- --input architecture.json
+
+# Specify a custom port
+npm run analyze -- -i architecture.json --port 8080
+```
+
+This will start the Vite development server and open the 3D visualization with your architecture loaded.
+
+### Validating Architecture Files
+
+Validate externally generated or hand-crafted architecture JSON files against the schema:
+
+```bash
+# Validate an architecture file
+npm run analyze -- --validate architecture.json
+```
+
+The validator checks:
+- Required fields (`name`, `version`, `nodes`, `connections`)
+- Node structure (`id`, `name`, `type` with valid enum values)
+- Connection structure (`id`, `sourceId`, `targetId`, `type` with valid enum values)
+- Nested children nodes (recursive validation)
+
+On success, it displays a summary with node and connection type breakdowns:
+
+```
+✅ Validation PASSED
+
+Architecture Summary:
+  Name:        My Application
+  Version:     1.0.0
+  Nodes:       5
+  Connections: 3
+
+Node Types:
+  service: 2
+  database: 1
+  cache: 1
+  gateway: 1
+
+Connection Types:
+  http: 2
+  database: 1
+```
+
+On failure, it shows detailed error messages with field paths:
+
+```
+❌ Validation FAILED
+
+Validation errors:
+  - architecture.nodes.0.type: Invalid option: expected one of "service"|"module"|...
+  - architecture.connections.1.sourceId: Connection sourceId is required
 ```
 
 ## Architecture Schema
