@@ -82,8 +82,8 @@ Be thorough but concise. Focus on the most important architectural components.`
 
 // Model names differ between Anthropic API and Vertex AI
 const MODELS = {
-  anthropic: 'claude-sonnet-4-20250514',
-  vertex: 'claude-sonnet-4@20250514',
+  anthropic: 'claude-opus-4-5-20251101',
+  vertex: 'claude-opus-4-5@20251101',
 }
 
 export class ArchitectureAnalyzer {
